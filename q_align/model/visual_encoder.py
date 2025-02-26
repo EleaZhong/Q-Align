@@ -1,5 +1,6 @@
 import math
 from typing import Any, Optional, Tuple, Union
+from torch.nn import functional as F
 
 from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPooling, BaseModelOutputWithPastAndCrossAttentions
 from transformers.modeling_utils import PreTrainedModel

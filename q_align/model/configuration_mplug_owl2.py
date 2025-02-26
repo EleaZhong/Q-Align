@@ -12,6 +12,9 @@ from transformers.utils import logging
 from transformers.models.auto import CONFIG_MAPPING
 
 
+logger = logging.get_logger(__name__)
+
+
 class LlamaConfig(PretrainedConfig):
     r"""
     This is the configuration class to store the configuration of a [`LlamaModel`]. It is used to instantiate an LLaMA

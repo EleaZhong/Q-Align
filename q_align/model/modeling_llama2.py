@@ -8,16 +8,85 @@ import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch import nn
 
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
+
 
 import copy
 import os
 import sys
 
+import transformers
+from transformers.activations import ACT2FN
+from transformers.cache_utils import Cache, DynamicCache
+from transformers.modeling_attn_mask_utils import (
+    AttentionMaskConverter,
+    _prepare_4d_attention_mask,
+    _prepare_4d_causal_attention_mask,
+    _prepare_4d_causal_attention_mask_for_sdpa,
+)
+from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast, SequenceClassifierOutputWithPast
+from transformers.modeling_utils import PreTrainedModel
+from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS, is_torch_greater_or_equal_than_1_13
+from transformers.utils import (
+    add_start_docstrings,
+    add_start_docstrings_to_model_forward,
+    is_flash_attn_2_available,
+    is_flash_attn_greater_or_equal_2_10,
+    logging,
+    replace_return_docstrings,
+)
+from transformers.utils.import_utils import is_torch_fx_available
+from transformers.models.llama.configuration_llama import LlamaConfig
+
+from transformers.models.llama.modeling_llama import (
+    LlamaRMSNorm,
+    LlamaRotaryEmbedding,
+    LlamaLinearScalingRotaryEmbedding,
+    LlamaDynamicNTKScalingRotaryEmbedding,
+    rotate_half,
+    apply_rotary_pos_emb,
+    LlamaMLP,
+    repeat_kv,
+    LlamaAttention,
+    LlamaFlashAttention2,
+    LlamaSdpaAttention,
+    LLAMA_ATTENTION_CLASSES,
+    LlamaDecoderLayer,
+    LLAMA_START_DOCSTRING,
+    LlamaPreTrainedModel,
+    LLAMA_INPUTS_DOCSTRING,
+    LlamaModel,
+    LlamaForCausalLM,
+    LlamaForSequenceClassification,
+)
+
+
+from transformers.configuration_utils import PretrainedConfig
+from transformers.utils import logging
+
+
 dir_path = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, dir_path)
 
-import transformers
-from transformers.models.llama.modeling_llama import *
+from .modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
+from .configuration_mplug_owl2 import LlamaConfig
+
+
+if is_flash_attn_2_available():
+    from flash_attn import flash_attn_func, flash_attn_varlen_func
+    from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
+
+
+# This makes `_prepare_4d_causal_attention_mask` a leaf function in the FX graph.
+# It means that the function will not be traced through and simply appear as a node in the graph.
+if is_torch_fx_available():
+    if not is_torch_greater_or_equal_than_1_13:
+        import torch.fx
+
+    _prepare_4d_causal_attention_mask = torch.fx.wrap(_prepare_4d_causal_attention_mask)
+
+logger = logging.get_logger(__name__)
+
 
 def _get_unpad_data(attention_mask):
     seqlens_in_batch = attention_mask.sum(dim=-1, dtype=torch.int32)
@@ -31,11 +100,10 @@ def _get_unpad_data(attention_mask):
     )
 
 
-from transformers.configuration_utils import PretrainedConfig
-from transformers.utils import logging
+logger = logging.get_logger(__name__)
 
-from .modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
-from .configuration_mplug_owl2 import LlamaConfig
+_CONFIG_FOR_DOC = "LlamaConfig"
+
 
 class MultiwayNetwork(nn.Module):
 
